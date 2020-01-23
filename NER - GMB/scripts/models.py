@@ -2,6 +2,7 @@ from sklearn_crfsuite import CRF, scorers, metrics
 from sklearn_crfsuite.metrics import flat_classification_report
 from sklearn.model_selection import train_test_split
 
+
 class CrfFeatures:
 
     def __init__(self):
@@ -10,7 +11,7 @@ class CrfFeatures:
     def word2features(self, sent, i):
         word = sent[i][0]
         postag = sent[i][1]
-
+        # lemma = sent[i][3]
         features = {
             'bias': 1.0,
             'word.lower()': word.lower(),
@@ -21,6 +22,9 @@ class CrfFeatures:
             'word.isdigit()': word.isdigit(),
             'postag': postag,
             'postag[:2]': postag[:2],
+            'has_hyphen': '-' in word,
+            # 'has_dot': '.' in word,
+            # 'lemma': lemma,
         }
         if i > 0:
             word1 = sent[i - 1][0]
@@ -54,7 +58,7 @@ class CrfFeatures:
         return [self.word2features(sent, i) for i in range(len(sent))]
 
     def sent2labels(self, sent):
-        return [label for token, postag, label in sent]
+        return [label for token, postag, label, lemma in sent]
 
     def run(self, sents):
         X = [self.sent2features(s) for s in sents]
