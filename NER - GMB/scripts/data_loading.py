@@ -57,12 +57,14 @@ def get_sent(data):
 
     data = data
 
-    agg_func = lambda s: [(w, p, t) for w, p, t in zip(s["raw"].values.tolist(),
+    agg_func = lambda s: [(w, p, t, l) for w, p, t, l in zip(s["raw"].values.tolist(),
                                                        s["pos"].values.tolist(),
-                                                       s["ner_target"].values.tolist())]
+                                                       s["ner_target"].values.tolist(),
+                                                       s['lemma'].values.tolist())]
     grouped = data.groupby("n_sent").apply(agg_func)
     sents = [s for s in grouped]
     return sents
+
 
 def bio_tags(annotated_sentence):
     """
@@ -74,7 +76,7 @@ def bio_tags(annotated_sentence):
     """
     proper_iob_tokens = []
     for idx, annotated_token in enumerate(annotated_sentence):
-        tag, word, ner = annotated_token
+        tag, word, ner, lemma = annotated_token
         if ner != 'O':
             if idx == 0:
                 ner = "B-" + ner
@@ -82,5 +84,5 @@ def bio_tags(annotated_sentence):
                 ner = "I-" + ner
             else:
                 ner = "B-" + ner
-        proper_iob_tokens.append((tag, word, ner))
+        proper_iob_tokens.append((tag, word, ner, lemma))
     return proper_iob_tokens
