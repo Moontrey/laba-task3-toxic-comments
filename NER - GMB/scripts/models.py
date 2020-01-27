@@ -1,7 +1,8 @@
 from sklearn_crfsuite import CRF, scorers, metrics
 from sklearn_crfsuite.metrics import flat_classification_report
 from sklearn.model_selection import train_test_split
-
+import numpy as np
+from tqdm import tqdm_notebook
 
 class CrfFeatures:
 
@@ -64,3 +65,65 @@ class CrfFeatures:
         X = [self.sent2features(s) for s in sents]
         y = [self.sent2labels(s) for s in sents]
         return X, y
+
+
+class HMM:
+
+    def __init__(self, dataframe):
+        '''
+        :param dataframe: dataframe with column 'raw' (corpus tokens)
+        '''
+        self.dataframe = dataframe
+        self.tags = dataframe['tags'].unique().tolist()
+        self.list_of_tags = dataframe['tags'].values.tolist()
+        self.list_of_words = dataframe['raw'].unique().tolist()
+        pass
+
+    def transition_(self):
+        '''
+        Transition probability matrix: probability of tag after tag
+        :return: transition probability matrix
+        '''
+        transition = np.zeros((len(self.tags), len(self.tags)))
+        for i in range(len(self.tags)):
+            for j in range(0, len(self.list_of_tags) - 1):
+                if self.list_of_tags[j] == self.tags[i]:
+                    if self.list_of_tags[j] == self.list_of_tags[j + 1]:
+                        transition[i][i] += 1
+                    else:
+                        transition[i][self.tags.index(self.list_of_tags[j + 1])] += 1
+        for i in range(len(transition)):
+            transition[i] = transition[i] / np.count_nonzero(transition[i])
+
+        return transition
+
+    def emission_(self):
+        '''
+        Emission probability matrix: probability of word given tag
+
+        :return: emission matrix
+        '''
+
+        emission = np.zeros((len(self.tags), len(self.list_of_words)))
+        for i in tqdm_notebook(zip(self.dataframe['raw'], self.dataframe['tags'])):
+            emission[self.tags.index(i[1])][self.list_of_words.index(i[0])] += 1
+
+        for i in range(len(emission)):
+            emission[i] = emission[i] / np.count_nonzero(emission[i])
+
+        return emission
+
+    def initial_state(self):
+        '''
+        Making an array with distribution of first tag
+        :return:
+        '''
+        tag_first_in_sent = dict(self.dataframe.groupby(['n_sent']).first().groupby(['tags'])['raw'].count())
+        full_tags_list = list({k: (tag_first_in_sent[k] if k in tag_first_in_sent.keys() else 0) for k in self.tags}.values())
+        prob = full_tags_list / sum(full_tags_list)
+
+        return prob
+
+    def run(self):
+
+        return self.transition_(), self.emission_(), self.initial_state()
