@@ -77,7 +77,6 @@ class HMM:
         self.tags = dataframe['tags'].unique().tolist()
         self.list_of_tags = dataframe['tags'].values.tolist()
         self.list_of_words = dataframe['raw'].unique().tolist()
-        pass
 
     def transition_(self):
         '''
@@ -100,7 +99,6 @@ class HMM:
     def emission_(self):
         '''
         Emission probability matrix: probability of word given tag
-
         :return: emission matrix
         '''
 
@@ -115,8 +113,8 @@ class HMM:
 
     def initial_state(self):
         '''
-        Making an array with distribution of first tag
-        :return:
+        Making an array with distribution of a first tag
+        :return: an array with probabilities of a first tag
         '''
         tag_first_in_sent = dict(self.dataframe.groupby(['n_sent']).first().groupby(['tags'])['raw'].count())
         full_tags_list = list({k: (tag_first_in_sent[k] if k in tag_first_in_sent.keys() else 0) for k in self.tags}.values())
