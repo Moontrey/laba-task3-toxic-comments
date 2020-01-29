@@ -76,7 +76,7 @@ class HMM(hmm.MultinomialHMM):
         self.dataframe = dataframe
         self.tags = dataframe['tags'].unique().tolist()
         self.list_of_tags = dataframe['tags'].values.tolist()
-        self.list_of_words = dataframe['raw'].unique().tolist()
+        self.list_of_words = list(np.append(dataframe['raw'].unique(), np.array(["<UNK>"])))
 
         self.transmat_ = self.transition_(gamma=gamma)
         self.emissionprob_ = self.emission_()
@@ -93,8 +93,6 @@ class HMM(hmm.MultinomialHMM):
         transition = np.zeros((len(self.tags), len(self.tags)))
         for previous, current in zip(self.list_of_tags, self.list_of_tags[1:]):
             transition[self.tags.index(previous)][self.tags.index(current)] += 1
-        for i in range(len(transition)):
-            transition[i] = transition[i] / sum(transition[i])
         if gamma:
             transition = self.smoothing(transition, gamma=gamma)
 
@@ -102,7 +100,7 @@ class HMM(hmm.MultinomialHMM):
 
     def smoothing(self, transition, gamma=0):
 
-        n_words = len(set(self.dataframe["raw"].values))
+        n_words = len(np.unique(self.list_of_words))
         for i in range(len(transition)):
             transition[i] = (transition[i] + gamma) / (sum(transition[i]) + gamma * n_words)
             transition[i] = transition[i] / sum(transition[i])
