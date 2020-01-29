@@ -3,6 +3,8 @@ from sklearn_crfsuite.metrics import flat_classification_report
 from sklearn.model_selection import train_test_split
 import numpy as np
 from tqdm import tqdm_notebook
+from hmmlearn import hmm
+
 
 class CrfFeatures:
 
@@ -67,32 +69,43 @@ class CrfFeatures:
         return X, y
 
 
-class HMM:
+class HMM(hmm.MultinomialHMM):
 
-    def __init__(self, dataframe):
-        '''
-        :param dataframe: dataframe with column 'raw' (corpus tokens)
-        '''
+    def fit(self, dataframe, gamma=0):
+
         self.dataframe = dataframe
         self.tags = dataframe['tags'].unique().tolist()
         self.list_of_tags = dataframe['tags'].values.tolist()
         self.list_of_words = dataframe['raw'].unique().tolist()
 
-    def transition_(self):
+        self.transmat_ = self.transition_(gamma=gamma)
+        self.emissionprob_ = self.emission_()
+        self.startprob_ = self.initial_state()
+        self.n_components = len(self.tags)
+
+        return self
+
+    def transition_(self, gamma=0):
         '''
         Transition probability matrix: probability of tag after tag
         :return: transition probability matrix
         '''
         transition = np.zeros((len(self.tags), len(self.tags)))
-        for i in range(len(self.tags)):
-            for j in range(0, len(self.list_of_tags) - 1):
-                if self.list_of_tags[j] == self.tags[i]:
-                    if self.list_of_tags[j] == self.list_of_tags[j + 1]:
-                        transition[i][i] += 1
-                    else:
-                        transition[i][self.tags.index(self.list_of_tags[j + 1])] += 1
+        for previous, current in zip(self.list_of_tags, self.list_of_tags[1:]):
+            transition[self.tags.index(previous)][self.tags.index(current)] += 1
         for i in range(len(transition)):
-            transition[i] = transition[i] / np.count_nonzero(transition[i])
+            transition[i] = transition[i] / sum(transition[i])
+        if gamma:
+            transition = self.smoothing(transition, gamma=gamma)
+
+        return transition
+
+    def smoothing(self, transition, gamma=0):
+
+        n_words = len(set(self.dataframe["raw"].values))
+        for i in range(len(transition)):
+            transition[i] = (transition[i] + gamma) / (sum(transition[i]) + gamma * n_words)
+            transition[i] = transition[i] / sum(transition[i])
 
         return transition
 
@@ -107,7 +120,7 @@ class HMM:
             emission[self.tags.index(i[1])][self.list_of_words.index(i[0])] += 1
 
         for i in range(len(emission)):
-            emission[i] = emission[i] / np.count_nonzero(emission[i])
+            emission[i] = emission[i] / sum(emission[i])
 
         return emission
 
@@ -122,6 +135,5 @@ class HMM:
 
         return prob
 
-    def run(self):
 
-        return self.transition_(), self.emission_(), self.initial_state()
+
