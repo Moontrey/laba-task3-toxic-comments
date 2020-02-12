@@ -6,6 +6,31 @@ from tqdm import tqdm_notebook
 from hmmlearn import hmm
 import json
 import pickle
+from future.utils import iteritems
+
+def iter_from_X_lengths(X, lengths):
+    if lengths is None:
+        yield 0, len(X)
+    else:
+        n_samples = X.shape[0]
+        end = np.cumsum(lengths).astype(np.int32)
+        start = end - lengths
+        if end[-1] > n_samples:
+            raise ValueError("more than {:d} samples in lengths array {!s}"
+                             .format(n_samples, lengths))
+
+        for i in range(len(lengths)):
+            yield start[i], end[i]
+
+
+def custom_t_t_split(X, lengths, test_size=0.4, random_state=77):
+    corpus = []
+    for i, j in iter_from_X_lengths(X, lengths):
+        corpus.append(X[i:j].tolist())
+    X_train, X_test, l_train, l_test = train_test_split(corpus, lengths, test_size=test_size, shuffle = False, random_state=random_state)
+    X_train = [item for sublist in X_train for item in sublist]
+    X_test = [list(item) for sublist in X_test for item in sublist]
+    return np.array(X_train), np.array(X_test), l_train, l_test
 
 
 class CrfFeatures:
@@ -73,67 +98,96 @@ class CrfFeatures:
 
 class HMM(hmm.MultinomialHMM):
 
-    def fit(self, dataframe, gamma=0):
+    def __init__(self, n_components, algorithm="viterbi", gamma=0):
+        super().__init__(self, n_components,
+                         algorithm=algorithm)
+        self.gamma = gamma
+        self.n_components = n_components
 
-        self.dataframe = dataframe
-        self.tags = dataframe['tags'].unique().tolist()
-        self.list_of_tags = dataframe['tags'].values.tolist()
-        self.list_of_words = list(np.append(dataframe['raw'].unique(), np.array(["<UNK>"])))
+    def fit(self, w_t, tags, lengths):
 
-        self.transmat_ = self.transition_(gamma=gamma)
-        self.emissionprob_ = self.emission_()
-        self.startprob_ = self.initial_state()
-        self.n_components = len(self.tags)
+        self.vocab = list(np.append(np.unique(w_t[:, 0]), np.array(["<UNK>"])))
+
+        self.transmat_ = self.transition_(w_t, tags, lengths)
+        self.emissionprob_ = self.emission_(w_t, tags)
+        self.startprob_ = self.initial_state(w_t, tags, lengths)
 
         return self
 
-    def transition_(self, gamma=0):
+    def transition_(self, w_t, tags, lengths):
         '''
         Transition probability matrix: probability of tag after tag
         :return: transition probability matrix
         '''
-        transition = np.zeros((len(self.tags), len(self.tags)))
-        for previous, current in zip(self.list_of_tags, self.list_of_tags[1:]):
-            transition[self.tags.index(previous)][self.tags.index(current)] += 1
-        if gamma:
-            transition = self.smoothing(transition, gamma=gamma)
+        transition = np.zeros((len(tags), len(tags)))
 
+        for i, j in iter_from_X_lengths(w_t, lengths):
+            for previous, current in zip(w_t[i:j][:, 1], w_t[i + 1:j][:, 1]):
+                transition[tags.index(previous)][tags.index(current)] += 1
+        if self.gamma:
+            transition = self.smoothing(transition)
+        else:
+            transition = np.array([i/np.sum(i) if np.sum(i) != 0 else np.zeros(len(i)) for i in transition])
         return transition
 
-    def smoothing(self, transition, gamma=0):
+    def smoothing(self, to_smooth):
 
-        n_words = len(np.unique(self.list_of_words))
-        for i in range(len(transition)):
-            transition[i] = (transition[i] + gamma) / (sum(transition[i]) + gamma * n_words)
-            transition[i] = transition[i] / sum(transition[i])
+        n = to_smooth.shape[1]
+        for i in range(len(to_smooth)):
+            to_smooth[i] = (to_smooth[i] + self.gamma) / (np.sum(to_smooth[i]) + self.gamma * n)
+            to_smooth[i] = to_smooth[i] / np.sum(to_smooth[i])
+        return to_smooth
 
-        return transition
-
-    def emission_(self):
+    def emission_(self, w_t, tags):
         '''
         Emission probability matrix: probability of word given tag
         :return: emission matrix
         '''
-
-        emission = np.zeros((len(self.tags), len(self.list_of_words)))
-        for i in tqdm_notebook(zip(self.dataframe['raw'], self.dataframe['tags'])):
-            emission[self.tags.index(i[1])][self.list_of_words.index(i[0])] += 1
-
-        for i in range(len(emission)):
-            emission[i] = emission[i] / sum(emission[i])
-
+        self.vocab = list(np.append(np.unique(w_t[:, 0]), np.array(["<UNK>"])))
+        emission = np.zeros((len(tags), len(self.vocab)))
+        for i in tqdm_notebook(w_t):
+            emission[tags.index(i[1])][self.vocab.index(i[0])] += 1
+        if self.gamma:
+            emission = self.smoothing(emission)
+        else:
+            for i in range(len(emission)):
+                emission[i] = emission[i] / sum(emission[i])
         return emission
 
-    def initial_state(self):
+    def initial_state(self, w_t, tags, lengths):
         '''
         Making an array with distribution of a first tag
         :return: an array with probabilities of a first tag
         '''
-        tag_first_in_sent = dict(self.dataframe.groupby(['n_sent']).first().groupby(['tags'])['raw'].count())
-        full_tags_list = list({k: (tag_first_in_sent[k] if k in tag_first_in_sent.keys() else 0) for k in self.tags}.values())
-        prob = full_tags_list / sum(full_tags_list)
+        tag_first_in_sent = np.zeros(len(tags))
+        for i, _ in iter_from_X_lengths(w_t, lengths):
+            tag_first_in_sent[tags.index(w_t[i][1])] += 1
+        prob = tag_first_in_sent / np.sum(tag_first_in_sent)
 
         return prob
+
+    def predict(self, X, tags, lengths=None):
+        # prepare data for HMM
+        X_new = X[:, 0]
+        for i in tqdm_notebook(range(len(X_new))):
+            if X_new[i] not in self.vocab:
+                X_new[i] = "<UNK>"
+        word2idx = self.word2idx_()
+        X_new = np.array([word2idx[word] for word in X_new]).reshape(-1, 1)
+        print('Decoding started')
+        _, state_sequence = super().decode(X_new, lengths)
+        idx2tag = self.idx2tag_(tags)
+        decoded_predicts = [idx2tag[key] for key in state_sequence]
+        return decoded_predicts
+
+    def word2idx_(self):
+        return {w: i for i, w in enumerate(self.vocab)}
+
+    def tag2idx_(self, tags):
+        return {t: i for i, t in enumerate(tags)}
+
+    def idx2tag_(self, tags):
+        return {v: k for k, v in iteritems(self.tag2idx_(tags))}
 
 
 class SpacyFit:
