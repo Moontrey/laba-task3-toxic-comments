@@ -27,7 +27,8 @@ def custom_t_t_split(X, lengths, test_size=0.4, random_state=77):
     corpus = []
     for i, j in iter_from_X_lengths(X, lengths):
         corpus.append(X[i:j].tolist())
-    X_train, X_test, l_train, l_test = train_test_split(corpus, lengths, test_size=test_size, shuffle = False, random_state=random_state)
+    X_train, X_test, l_train, l_test = train_test_split(corpus, lengths, test_size=test_size,
+                                                        shuffle=False, random_state=random_state)
     X_train = [item for sublist in X_train for item in sublist]
     X_test = [list(item) for sublist in X_test for item in sublist]
     return np.array(X_train), np.array(X_test), l_train, l_test
