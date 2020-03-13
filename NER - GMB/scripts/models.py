@@ -41,7 +41,7 @@ class CrfFeatures:
 
     def word2features(self, sent, i):
         word = sent[i][0]
-        postag = sent[i][1]
+        postag = sent[i][2]
         # lemma = sent[i][3]
         features = {
             'bias': 1.0,
@@ -59,7 +59,7 @@ class CrfFeatures:
         }
         if i > 0:
             word1 = sent[i - 1][0]
-            postag1 = sent[i - 1][1]
+            postag1 = sent[i - 1][2]
             features.update({
                 '-1:word.lower()': word1.lower(),
                 '-1:word.istitle()': word1.istitle(),
@@ -72,7 +72,7 @@ class CrfFeatures:
 
         if i < len(sent) - 1:
             word1 = sent[i + 1][0]
-            postag1 = sent[i + 1][1]
+            postag1 = sent[i + 1][2]
             features.update({
                 '+1:word.lower()': word1.lower(),
                 '+1:word.istitle()': word1.istitle(),
@@ -89,7 +89,7 @@ class CrfFeatures:
         return [self.word2features(sent, i) for i in range(len(sent))]
 
     def sent2labels(self, sent):
-        return [label for token, postag, label, lemma in sent]
+        return [label for token, label, postag in sent]
 
     def run(self, sents):
         X = [self.sent2features(s) for s in sents]
@@ -105,26 +105,39 @@ class HMM(hmm.MultinomialHMM):
         self.gamma = gamma
         self.n_components = n_components
 
-    def fit(self, w_t, tags, lengths):
+    def for_train(self, w_t):
 
+        self.tags = list(np.unique(w_t[:, 1]))
         self.vocab = list(np.append(np.unique(w_t[:, 0]), np.array(["<UNK>"])))
+        temp = [i for i in range(len(w_t)) if w_t[i][1] == 'Stop']
+        self.length = []
+        for i in range(len(temp)):
+            if i == 0:
+                self.length.append(temp[i] + 1)
+            else:
+                self.length.append(temp[i] - temp[i - 1])
+        return
 
-        self.transmat_ = self.transition_(w_t, tags, lengths)
-        self.emissionprob_ = self.emission_(w_t, tags)
-        self.startprob_ = self.initial_state(w_t, tags, lengths)
+    def fit(self, w_t):
+
+        self.for_train(w_t)
+
+        self.transmat_ = self.transition_(w_t)
+        self.emissionprob_ = self.emission_(w_t)
+        self.startprob_ = self.initial_state(w_t)
 
         return self
 
-    def transition_(self, w_t, tags, lengths):
+    def transition_(self, w_t):
         '''
         Transition probability matrix: probability of tag after tag
         :return: transition probability matrix
         '''
-        transition = np.zeros((len(tags), len(tags)))
+        transition = np.zeros((len(self.tags), len(self.tags)))
 
-        for i, j in iter_from_X_lengths(w_t, lengths):
+        for i, j in iter_from_X_lengths(w_t, self.length):
             for previous, current in zip(w_t[i:j][:, 1], w_t[i + 1:j][:, 1]):
-                transition[tags.index(previous)][tags.index(current)] += 1
+                transition[self.tags.index(previous)][self.tags.index(current)] += 1
         if self.gamma:
             transition = self.smoothing(transition)
         else:
@@ -139,15 +152,15 @@ class HMM(hmm.MultinomialHMM):
             to_smooth[i] = to_smooth[i] / np.sum(to_smooth[i])
         return to_smooth
 
-    def emission_(self, w_t, tags):
+    def emission_(self, w_t):
         '''
         Emission probability matrix: probability of word given tag
         :return: emission matrix
         '''
         self.vocab = list(np.append(np.unique(w_t[:, 0]), np.array(["<UNK>"])))
-        emission = np.zeros((len(tags), len(self.vocab)))
+        emission = np.zeros((len(self.tags), len(self.vocab)))
         for i in tqdm_notebook(w_t):
-            emission[tags.index(i[1])][self.vocab.index(i[0])] += 1
+            emission[self.tags.index(i[1])][self.vocab.index(i[0])] += 1
         if self.gamma:
             emission = self.smoothing(emission)
         else:
@@ -155,19 +168,29 @@ class HMM(hmm.MultinomialHMM):
                 emission[i] = emission[i] / sum(emission[i])
         return emission
 
-    def initial_state(self, w_t, tags, lengths):
+    def initial_state(self, w_t):
         '''
         Making an array with distribution of a first tag
         :return: an array with probabilities of a first tag
         '''
-        tag_first_in_sent = np.zeros(len(tags))
-        for i, _ in iter_from_X_lengths(w_t, lengths):
-            tag_first_in_sent[tags.index(w_t[i][1])] += 1
+        tag_first_in_sent = np.zeros(len(self.tags))
+        for i, _ in iter_from_X_lengths(w_t, self.length):
+            tag_first_in_sent[self.tags.index(w_t[i][1])] += 1
         prob = tag_first_in_sent / np.sum(tag_first_in_sent)
 
         return prob
 
-    def predict(self, X, tags, lengths=None):
+    def len_for_test(self, w_t):
+        temp = [i for i in range(len(w_t)) if w_t[i][1] == 'Stop']
+        length_t = []
+        for i in range(len(temp)):
+            if i == 0:
+                length_t.append(temp[i] + 1)
+            else:
+                length_t.append(temp[i] - temp[i - 1])
+        return length_t
+
+    def predict(self, X):
         # prepare data for HMM
         X_new = X[:, 0]
         for i in tqdm_notebook(range(len(X_new))):
@@ -176,19 +199,20 @@ class HMM(hmm.MultinomialHMM):
         word2idx = self.word2idx_()
         X_new = np.array([word2idx[word] for word in X_new]).reshape(-1, 1)
         print('Decoding started')
-        _, state_sequence = super().decode(X_new, lengths)
-        idx2tag = self.idx2tag_(tags)
+        length_t = self.len_for_test(X)
+        _, state_sequence = super().decode(X_new, length_t)
+        idx2tag = self.idx2tag_()
         decoded_predicts = [idx2tag[key] for key in state_sequence]
         return decoded_predicts
 
     def word2idx_(self):
         return {w: i for i, w in enumerate(self.vocab)}
 
-    def tag2idx_(self, tags):
-        return {t: i for i, t in enumerate(tags)}
+    def tag2idx_(self):
+        return {t: i for i, t in enumerate(self.tags)}
 
-    def idx2tag_(self, tags):
-        return {v: k for k, v in iteritems(self.tag2idx_(tags))}
+    def idx2tag_(self):
+        return {v: k for k, v in iteritems(self.tag2idx_())}
 
 
 class SpacyFit:
@@ -199,60 +223,61 @@ class SpacyFit:
 
     def tsv_to_json(self, input_path, output_path, unknown_label):
 
-        f = open(input_path, 'r', encoding='utf-8')  # input file
-        fp = open(output_path, 'w')  # output file
-        data_dict = {}
-        annotations = []
-        label_dict = {}
-        s = ''
-        start = 0
-        for line in f:
-            if line[0:len(line) - 1] != '.\tO':
-                word, entity = line.split('\t')
-                s += word + " "
-                entity = entity[:len(entity) - 1]
-                if entity != unknown_label:
-                    if len(entity) != 1:
-                        d = dict()
-                        d['text'] = word
-                        d['start'] = start
-                        d['end'] = start + len(word) - 1
-                        try:
-                            label_dict[entity].append(d)
-                        except:
-                            label_dict[entity] = []
-                            label_dict[entity].append(d)
-                start += len(word) + 1
-            else:
-                data_dict['content'] = s
-                s = ''
-                label_list = []
-                for ents in list(label_dict.keys()):
-                    for i in range(len(label_dict[ents])):
-                        if label_dict[ents][i]['text'] != '':
-                            l = [ents, label_dict[ents][i]]
-                            for j in range(i + 1, len(label_dict[ents])):
-                                if label_dict[ents][i]['text'] == label_dict[ents][j]['text']:
-                                    di = dict()
-                                    di['start'] = label_dict[ents][j]['start']
-                                    di['end'] = label_dict[ents][j]['end']
-                                    di['text'] = label_dict[ents][i]['text']
-                                    l.append(di)
-                                    label_dict[ents][j]['text'] = ''
-                            label_list.append(l)
-
-                for entities in label_list:
-                    label = dict()
-                    label['label'] = [entities[0]]
-                    label['points'] = entities[1:]
-                    annotations.append(label)
-                data_dict['annotation'] = annotations
-                annotations = []
-                json.dump(data_dict, fp)
-                fp.write('\n')
+        with open(input_path, 'r', encoding='utf-8') as f, open(output_path, 'w') as fp:
+        #f = open(input_path, 'r', encoding='utf-8')  # input file
+        #fp = open(output_path, 'w')  # output file
                 data_dict = {}
-                start = 0
+                annotations = []
                 label_dict = {}
+                s = ''
+                start = 0
+                for line in f:
+                    if line[0:len(line) - 1] != '.\tStop':
+                        word, entity = line.split('\t')
+                        s += word + " "
+                        entity = entity[:len(entity) - 1]
+                        if entity != unknown_label:
+                            if len(entity) != 1:
+                                d = dict()
+                                d['text'] = word
+                                d['start'] = start
+                                d['end'] = start + len(word) - 1
+                                try:
+                                    label_dict[entity].append(d)
+                                except:
+                                    label_dict[entity] = []
+                                    label_dict[entity].append(d)
+                        start += len(word) + 1
+                    else:
+                        data_dict['content'] = s
+                        s = ''
+                        label_list = []
+                        for ents in list(label_dict.keys()):
+                            for i in range(len(label_dict[ents])):
+                                if label_dict[ents][i]['text'] != '':
+                                    l = [ents, label_dict[ents][i]]
+                                    for j in range(i + 1, len(label_dict[ents])):
+                                        if label_dict[ents][i]['text'] == label_dict[ents][j]['text']:
+                                            di = dict()
+                                            di['start'] = label_dict[ents][j]['start']
+                                            di['end'] = label_dict[ents][j]['end']
+                                            di['text'] = label_dict[ents][i]['text']
+                                            l.append(di)
+                                            label_dict[ents][j]['text'] = ''
+                                    label_list.append(l)
+
+                        for entities in label_list:
+                            label = dict()
+                            label['label'] = [entities[0]]
+                            label['points'] = entities[1:]
+                            annotations.append(label)
+                        data_dict['annotation'] = annotations
+                        annotations = []
+                        json.dump(data_dict, fp)
+                        fp.write('\n')
+                        data_dict = {}
+                        start = 0
+                        label_dict = {}
 
     def spacy_corpus(self, input_file=None, output_file=None):
 
